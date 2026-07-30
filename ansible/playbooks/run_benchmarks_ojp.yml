@@ -38,6 +38,12 @@
   # knows to re-run: ansible-playbook setup.yml --tags ojp
   hosts: ojp
   gather_facts: false
+  vars: &ojp_benchmark_vars
+    expected_slow_query_segregation_enabled: "{{ ojp_server_slow_query_segregation_enabled | default(false) | bool }}"
+    expected_slow_query_segregation_flag: >-
+      {{ expected_slow_query_segregation_enabled | ternary('true', 'false') }}
+    expected_slow_query_segregation_execstart_token: >-
+      -Dojp.server.slowQuerySegregation.enabled={{ expected_slow_query_segregation_flag }}
 
   tasks:
     - name: Gather service facts
@@ -54,11 +60,36 @@
           — re-run setup.yml --tags ojp to install/start it.
         success_msg: "ojp-server is running on {{ inventory_hostname }}"
 
+    - name: Capture ojp-server ExecStart
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - ojp-server
+          - --property=ExecStart
+          - --value
+      register: ojp_execstart_out
+      changed_when: false
+
+    - name: Assert ojp-server slow query segregation mode matches benchmark profile
+      ansible.builtin.assert:
+        that:
+          - expected_slow_query_segregation_execstart_token in ojp_execstart_out.stdout.split()
+        fail_msg: >-
+          ojp-server slow query segregation mode on {{ inventory_hostname }} does not match
+          expected {{ expected_slow_query_segregation_flag }}.
+          ExecStart={{ ojp_execstart_out.stdout | trim }}
+        success_msg: >-
+          ojp-server slow query segregation mode on {{ inventory_hostname }} matches
+          expected {{ expected_slow_query_segregation_flag }}.
+
 - name: Run benchmark from control node
   hosts: control
   gather_facts: false
 
   vars:
+    <<: *ojp_benchmark_vars
+    workload_type: "{{ bench_workload_type | default('W5_HTAP') }}"
     run_name:   "{{ benchmark_profile_name | default('ojp-prod') }}-{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
     db_host:    "{{ hostvars[groups['db'][0]]['ansible_host'] }}"
     # Build the list of OJP_IP:PORT strings from the ojp inventory group.
@@ -128,7 +159,9 @@
             "bench_replica_count": {{ bench_replica_count | int }},
             "ojp_servers": {{ groups['ojp'] | length }},
             "real_db_connections_per_ojp_server": {{ (bench_db_connection_budget | int / (groups['ojp'] | length if (groups['ojp'] | length) > 0 else 1)) | round(0, 'ceil') | int }},
-            "external_lb": false
+            "external_lb": false,
+            "workload_type": "{{ workload_type }}",
+            "slow_query_segregation_enabled": {{ expected_slow_query_segregation_enabled | to_json }}
           }
 
     - name: Assert loadgen inventory is defined

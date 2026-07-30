@@ -24,4 +24,8 @@ bench_slo_p95_ms:        1500
 # connections are pooled centrally in the OJP server tier.
 # Production topology: 3 OJP servers × 16 real backend connections = 48.
 bench_db_connection_budget: 48
+
+# OJP server behavior
+ojp_server_slow_query_segregation_enabled: false
+
 benchmark_profile_name: "ojp-prod"
